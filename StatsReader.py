@@ -5,15 +5,8 @@ import requests
 import json
 
 
-# 'first_name'
-# 'second_name'
-# 'team_code'
-# 'now_cost'
-# 'total_points'
-# 'points_per_game'
-# 'chance_of_playing_next_round'
-
 '''
+Types avalible from FPL database
 types:
     ['chance_of_playing_next_round',
     'chance_of_playing_this_round',
