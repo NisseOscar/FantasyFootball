@@ -4,6 +4,11 @@ import numpy as np
 import requests
 import json
 from datetime import datetime, date
+from StatisticalModel import StatModel
+from understat import Understat
+import asyncio
+import aiohttp
+import itertools
 
 '''
 Types avalible from FPL database
@@ -68,6 +73,7 @@ class FPLReader():
     def __init__(self,login,password):
 
         self.session = requests.session()
+        self.model = StatModel()
 
         url = 'https://users.premierleague.com/accounts/login/'
         payload = {
@@ -77,73 +83,50 @@ class FPLReader():
              'app': 'plfpl-web'
             }
         self.session.post(url,payload)
-
-        self.teams = {1:'Arsenal',
+        self.teams = teams = {1:'Arsenal',
+            2:'Ason Villa',
             2:'Bournemouth',
             3:'Brighton',
             4:'Burnley',
-            5:'Cardiff',
+            5:'Chelsea',
             6:'Chelsea',
             7:'Crystal Palace',
             8:'Everton',
-            9:'Fulham',
-            10:'Huddersfield',
-            11:'Leicester',
-            12:'Liverpool',
-            13:'Man City',
-            14:'Man Utd',
-            15:'Newcastle',
+            9:'Leicester',
+            10:'Liverpool',
+            11:'Manchester City',
+            12:'Manchester United',
+            13:'Newcastle United',
+            14:'Norwich',
+            15:'Sheffield United',
             16:'Southampton',
-            17:'Spurs',
+            17:'Tottenham',
             18:'Watford',
             19:'West Ham',
-            20:'Wolves',
+            20:'Wolverhampton Wanderers',
         }
-
         self.positions = {1:'Goalie',2:'Defender',3:'Midfielder',4:'Forward'}
-
         self.fixtures = self._getFixtures()
-
         self.players = self._getPlayers()
 
 
     def __metric(self,player):
-        return player['form']
-        if(player['element_type']==1):
-            vlue = self._goalieMetric(player)
-        elif(player['element_type']==2):
-            vlue = self._defMetric(player)
-        elif(player['element_type']==3):
-            vlue = self._midMetric(player)
-        elif(player['element_type']==4):
-            vlue = self._forwrdMetric(player)
+        # self.model.evaluate(player)
+        return self.model.evaluate(player)
 
-        fxtrDfclty = self.getFxtrDfclty(player)
-        # playchnce = int(player['chance_of_playing_next_round'])
-        return fxtrDfclty*vlue
-
-    def _goalieMetric(self,player):
-        pentalyScore = 5*player['penalties_saved']*38/self.getGW()
-        return  (4.792*player['clean_sheets']) + (0.519*player['saves']) - 2.901 + pentalyScore
-    def _defMetric(self,player):
-        return (5.029*player['clean_sheets'])-player['yellow_cards']+5*player['goals_scored'] - 3.860
-    def _midMetric(self,player):
-        return (5*player['goals_scored'])-player['yellow_cards'] - 5.670
-    def _forwrdMetric(self,player):
-        return 5*player['goals_scored']-5.670
 
     def getFxtrDfclty(self,player):
         fixtrs = self.getFixture(player['team'])
         gW = self.getGW()
-        posFutr = [1,1,0.5,0.5][player['element_type']-1]
         #preDfclty = sum([fixtrus[i]['difficulty'] for i in range(0,gW)])/(gW*5))
-        futrDfclty = (1-posFutr*sum([fixtrs[i]['difficulty']*(1-0.1*(i-gW)) for i in range(gW,gW+5)])/19)
+        futrDfclty = (1-sum([0.02*fixtrs[i]['difficulty']*(1-0.1*(i-gW)) for i in range(gW,gW+5)]))
         # print(futrDfclty)
         #posPre = [0.1,0.1,0.1,0.1][player['type']-1]
+        # print(futrDfclty)
         return futrDfclty
 
     def getTeam(self,id):
-        return self.teams[id]
+        return self.teams[id].copy()
 
     def _getPlayers(self):
         '''
@@ -154,27 +137,43 @@ class FPLReader():
             Cost is from FPL data an integer 10 times the actual cost.
             name is encoded in utf-8
         '''
-        fplData = requests.get('https://fantasy.premierleague.com/api/bootstrap-static/').json()
-        players={}
-        for i,f in enumerate(fplData['elements']):
-            id = f['id']
-            name = (f['first_name'] + ' '+ f['second_name'])#.encode('utf-8','ignore').decode('utf-8')
-            team = f['team']
-            cost = f['now_cost']
-            type = f["element_type"]
-            total = f['total_points']
-            deltaCost = f['cost_change_event']
-            weight = self.__metric(f)
-            playchance = f['chance_of_playing_next_round']
-            players[id] = {'name':name, 'team':team, 'form':weight, 'totalPoints':total, 'cost':cost, 'type':type, 'deltaCost':deltaCost}
+        async def getUnderstat():
+            fplData = requests.get('https://fantasy.premierleague.com/api/bootstrap-static/').json()
+            async with aiohttp.ClientSession() as session:
+                understat = Understat(session)
+                uStats= await understat.get_league_players("epl", 2019)
+                uStats = {p['player_name']:p for p in uStats}
+                self.players = players = {}
+                for i,f in enumerate(fplData['elements']):
+                    name = (f['first_name'] + ' '+ f['second_name'])#.encode('utf-8','ignore').decode('utf-8')
+                    team = self.teams[f['team']]
+                    if(name in uStats):
+                        players[f['id']] = {**f,**uStats[name]}
+                    else:
+                        splt = name.split(' ')
+                        for i in range(2,len(splt)+1):
+                            prmtion = list(itertools.permutations(splt,i))
+                            prmtion = [' '.join(p) for p in prmtion]
+                            for pname in prmtion:
+                                if (pname in uStats):
+                                    players[f['id']] = {**f,**uStats[pname]}
 
-        return players
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(getUnderstat())
 
-    def getPlayers(self):
+        # Value each player according to model:
+        for id in self.players:
+            player = self.players[id]
+            player['modelValue'] = self.__metric(player)
+
         return self.players
 
+
+    def getPlayers(self):
+        return self.players.copy()
+
     def getPlayer(self,id):
-        return self.players[id]
+        return self.players[id].copy()
 
     def getTeam(self,teamid,names = False,positions=False):
         '''
@@ -215,7 +214,7 @@ class FPLReader():
         return fixtures
 
     def getFixtures(self):
-        return self.fixtures
+        return self.fixtures.copy()
 
     def getFixture(self,team):
         '''
@@ -223,18 +222,7 @@ class FPLReader():
         returns:
             dictionary on the form {'versus':Int,'difficulty':int,'home':Boolean}}
         '''
-        return self.fixtures[team]
-
-
-    def getStats(self):
-
-        stats = self.session.get('https://fantasy.premierleague.com/api/fixtures/').json()
-        stats = [k for k in stats if(k['finished'])]
-
-        for k in stats[4]['stats']:
-            print(k)
-
-
+        return self.fixtures[team].copy()
 
     def posTrans(self,pos):
         return self.positions[pos]
@@ -242,8 +230,6 @@ class FPLReader():
     def getGW(self):
         d1 = date(2019,8,13)
         return (date.today()-d1).days //7
-
-
 
     def saveStats(self):
         '''
@@ -255,20 +241,3 @@ class FPLReader():
 
         # with  open("./stats/MatchesGW"+str(self.getGW()) + date + ".json","w") as f:
         #     json.dump(self.session.get('https://fantasy.premierleague.com/api/fixtures/').json(),f)
-
-
-
-
-if __name__ == '__main__':
-
-
-    reader = FPLReader('o.n.johansson@gmail.com','OptiFpl97!')
-    # reader.saveStats()
-    print(reader.getStats())
-    print(reader.getPlayers())
-    # print(reader.getTeam(5261769,names = True,positions=True))
-    # players = getPlayers()
-    # print(players)
-    #
-    # with  open("./GW6.json","w") as f:
-    #     json.dump(players,f)

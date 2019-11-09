@@ -11,8 +11,8 @@ def getGW():
     return (date.today()-d1).days //7
 
 gW = getGW()
-properties = [['goals_conceded','penalties_saved', 'saves','influence','ict_index'],
-        ['goals_conceded','influence','creativity','threat','ict_index'],
+properties = [['clean_sheets','penalties_saved', 'saves','influence','ict_index'],
+        ['goals_conceded','clean_sheets','influence','creativity','threat','ict_index'],
         ['influence','creativity','threat','ict_index'],
         ['influence','creativity','threat','ict_index']]
 
@@ -21,7 +21,7 @@ players={}
 for i,f in enumerate(fplData['elements']):
     id = f['id']
     adjScore = f['total_points']-2*f['minutes']/(gW*90)
-    if(adjScore >=0):
+    if(adjScore >=10):
         players[id] = player =  {}
         player['Score'] = adjScore
         player['type'] = type =  f['element_type']
